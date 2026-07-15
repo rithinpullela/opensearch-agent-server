@@ -66,12 +66,15 @@ from server.rate_limiting import (  # noqa: E402
     setup_rate_limiting,
 )
 from server.request_id_middleware import RequestIdMiddleware  # noqa: E402
+from server.response_formats import wrap_inference_results  # noqa: E402
 from server.run_routes import (  # noqa: E402
+    _extract_auth_headers,
     cancel_run_route,
     create_run_route,
     get_run_events_route,
     get_run_route,
 )
+
 
 def _init_tracing() -> None:
     """Initialize OpenTelemetry tracing.
@@ -394,6 +397,23 @@ def create_app(config_override: ServerConfig | None = None) -> FastAPI:
             "ag_ui.art_agent_factory_ready",
         )
 
+        # Register the agentic-search agent (NLQ->DSL), reachable via POST /invoke
+        # (RFC #140). Built once here — the instance is stateless per request, so
+        # the same one is handed out each call while the model stays reused.
+        from agents.agentic_search import create_agentic_search_agent
+
+        agentic_search_agent = create_agentic_search_agent(opensearch_url)
+        orchestrator.register_agent_factory(
+            name="agentic_search",
+            factory=lambda: agentic_search_agent,
+            description="NLQ->DSL generation for agentic search (non-streaming, via /invoke)",
+        )
+        log_info_event(
+            logger,
+            "✓ agentic_search agent factory registered",
+            "ag_ui.agentic_search_agent_factory_ready",
+        )
+
         yield
 
     app = FastAPI(
@@ -633,6 +653,75 @@ async def cancel_run(run_id: str, request: Request) -> CancelRunResponse:
     return await cancel_run_route(
         persistence=persistence, run_id=run_id, request=request
     )
+
+@app.post("/invoke", tags=["invoke"])
+@rate_limit
+async def invoke(
+    request: Request,
+    orch: AgentOrchestrator = Depends(get_orchestrator),
+) -> JSONResponse:
+    """Non-streaming endpoint.
+
+    Runs the agent to completion and returns the final response as JSON.
+    Accepts a string query or message list (Strands Agent interface).
+    """
+    body = await request.json()
+    query = body.get("query")
+    messages = body.get("messages")
+    agent_name = body.get("agent")
+    # Generic extensions: `context` is structured input forwarded verbatim to
+    # context-aware agents (e.g. DSL generation reads `index_name` from it);
+    # `response_format` opts into the ml-commons inference_results envelope so an
+    # ml-commons connector's passthrough can consume the reply. Both default to
+    # today's behavior, so existing callers are unaffected.
+    context = body.get("context")
+    response_format = body.get("response_format")
+
+    if not query and not messages:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "error": "Request must include 'query' or 'messages'.",
+                "error_type": "ValidationError",
+                "status": "error",
+            },
+        )
+
+    if messages:
+        prompt: str | list[dict] = [
+            {"role": m["role"], "content": [{"text": m["content"]}]}
+            for m in messages
+        ]
+    else:
+        prompt = query
+
+    forwarded_headers = _extract_auth_headers(request)
+
+    try:
+        response_text = await orch.invoke(
+            prompt=prompt,
+            agent_name=agent_name,
+            headers=forwarded_headers,
+            context=context,
+        )
+        if response_format == "inference_results":
+            return JSONResponse(content=wrap_inference_results(response_text))
+        return JSONResponse(content={"response": response_text, "status": "success"})
+    except Exception as e:
+        log_info_event(
+            logger,
+            f"Invoke error: {e}",
+            "invoke.error",
+            error=str(e),
+        )
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": str(e),
+                "error_type": type(e).__name__,
+                "status": "error",
+            },
+        )
 
 
 if __name__ == "__main__":
