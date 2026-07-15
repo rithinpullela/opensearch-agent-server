@@ -19,8 +19,9 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from agents.agentic_search.agent import AgenticSearchAgent
-from agents.agentic_search.prompts import FALLBACK_DSL, SYSTEM_BLOCKS, EmitSearch
 from agents.agentic_search.strategies import STRATEGIES
+from agents.agentic_search.strategies.base import FALLBACK_DSL
+from agents.agentic_search.strategies.direct_dsl import SYSTEM_BLOCKS, EmitSearch
 
 pytestmark = pytest.mark.unit
 

@@ -16,6 +16,10 @@ from typing import TYPE_CHECKING, Any, Protocol
 if TYPE_CHECKING:
     from opensearchpy import OpenSearch
 
+# Returned when generation fails or nothing in the mapping is relevant: a broad
+# match_all keeps the upstream search degraded-but-working instead of erroring.
+FALLBACK_DSL = '{"size":10,"query":{"match_all":{}}}'
+
 
 @dataclass(frozen=True)
 class GenerationRequest:

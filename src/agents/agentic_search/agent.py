@@ -15,9 +15,8 @@ from typing import Any
 
 from opensearchpy import OpenSearch
 
-from agents.agentic_search.prompts import FALLBACK_DSL
 from agents.agentic_search.strategies import DEFAULT_STRATEGY, STRATEGIES
-from agents.agentic_search.strategies.base import GenerationRequest
+from agents.agentic_search.strategies.base import FALLBACK_DSL, GenerationRequest
 from utils.logging_helpers import get_logger, log_error_event, log_info_event
 from utils.model_factory import create_model
 
